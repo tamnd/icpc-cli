@@ -6,71 +6,90 @@ import (
 	"github.com/tamnd/any-cli/kit"
 )
 
-// These tests are offline: they exercise the URI driver's pure string functions
-// and the host wiring (mint, body, resolve), which need no network. The client's
-// HTTP behaviour is covered in icpc_test.go.
-
 func TestDomainInfo(t *testing.T) {
 	info := Domain{}.Info()
 	if info.Scheme != "icpc" {
 		t.Errorf("Scheme = %q, want icpc", info.Scheme)
 	}
-	if len(info.Hosts) == 0 || info.Hosts[0] != Host {
-		t.Errorf("Hosts = %v, want [%s]", info.Hosts, Host)
+	if len(info.Hosts) == 0 {
+		t.Error("Hosts should not be empty")
 	}
 	if info.Identity.Binary != "icpc" {
-		t.Errorf("Identity.Binary = %q, want icpc", info.Identity.Binary)
+		t.Errorf("Binary = %q, want icpc", info.Identity.Binary)
 	}
 }
 
 func TestClassify(t *testing.T) {
-	cases := []struct{ in, typ, id string }{
-		{"wiki/Go", "page", "wiki/Go"},
-		{"/about/", "page", "about"},
-		{"https://" + Host + "/team/contact", "page", "team/contact"},
+	cases := []struct {
+		in      string
+		wantTyp string
+		wantID  string
+		wantErr bool
+	}{
+		{"2024", "results", "2024", false},
+		{"2019", "results", "2019", false},
+		{"4234", "problem", "4234", false},
+		{"100", "problem", "100", false},
+		{"", "", "", true},
+		{"not-a-number", "", "", true},
 	}
 	for _, tc := range cases {
 		typ, id, err := Domain{}.Classify(tc.in)
-		if err != nil || typ != tc.typ || id != tc.id {
-			t.Errorf("Classify(%q) = (%q, %q, %v), want (%q, %q, nil)",
-				tc.in, typ, id, err, tc.typ, tc.id)
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("Classify(%q) expected error, got (%q,%q,nil)", tc.in, typ, id)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("Classify(%q) error = %v", tc.in, err)
+			continue
+		}
+		if typ != tc.wantTyp || id != tc.wantID {
+			t.Errorf("Classify(%q) = (%q,%q), want (%q,%q)", tc.in, typ, id, tc.wantTyp, tc.wantID)
 		}
 	}
 }
 
 func TestLocate(t *testing.T) {
-	got, err := Domain{}.Locate("page", "wiki/Go")
-	want := "https://" + Host + "/wiki/Go"
-	if err != nil || got != want {
-		t.Errorf("Locate = (%q, %v), want (%q, nil)", got, err, want)
+	cases := []struct {
+		typ     string
+		id      string
+		want    string
+		wantErr bool
+	}{
+		{"results", "2024", "https://icpc.global/worldfinals", false},
+		{"problem", "100", "https://icpcarchive.ecs.baylor.edu/index.php?option=com_onlinejudge&Itemid=8&page=show_problem&problem=100", false},
+		{"bogus", "x", "", true},
+	}
+	for _, tc := range cases {
+		got, err := Domain{}.Locate(tc.typ, tc.id)
+		if tc.wantErr {
+			if err == nil {
+				t.Errorf("Locate(%q,%q) expected error", tc.typ, tc.id)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("Locate(%q,%q) error = %v", tc.typ, tc.id, err)
+			continue
+		}
+		if got != tc.want {
+			t.Errorf("Locate(%q,%q) = %q, want %q", tc.typ, tc.id, got, tc.want)
+		}
 	}
 }
 
-// TestHostWiring mounts the driver in a kit Host (the runtime ant drives) and
-// checks the round trip: a record mints to its URI, its body is readable, and a
-// bare id resolves back to the same URI. The init in domain.go registers the
-// domain, so kit.Open finds it.
 func TestHostWiring(t *testing.T) {
 	h, err := kit.Open()
 	if err != nil {
 		t.Fatal(err)
 	}
-
-	p := &Page{ID: "wiki/Go", URL: "https://" + Host + "/wiki/Go", Title: "Go", Body: "Go is a language."}
-	u, err := h.Mint(p)
+	got, err := h.ResolveOn("icpc", "2024")
 	if err != nil {
-		t.Fatalf("Mint: %v", err)
+		t.Fatalf("ResolveOn: %v", err)
 	}
-	if want := "icpc://page/wiki/Go"; u.String() != want {
-		t.Errorf("Mint = %q, want %q", u.String(), want)
-	}
-
-	if body, ok := h.Body(p); !ok || body == "" {
-		t.Errorf("Body = (%q, %v), want non-empty", body, ok)
-	}
-
-	got, err := h.ResolveOn("icpc", "about")
-	if err != nil || got.String() != "icpc://page/about" {
-		t.Errorf("ResolveOn = (%q, %v), want icpc://page/about", got.String(), err)
+	if got.String() != "icpc://results/2024" {
+		t.Errorf("ResolveOn = %q, want icpc://results/2024", got.String())
 	}
 }
